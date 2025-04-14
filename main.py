@@ -3,17 +3,18 @@ from pulp import LpMaximize, LpProblem, LpVariable, lpSum
 import copy
 import matrixGenerator
 import visualization
+import matplotlib.pyplot as plt
 
-camera_positions = [(0, 0), (3, 3), (3, -3), (-3, 3), (-3, -3)]# 相机位置
-targets_positions = matrixGenerator.generate_random_points(50) #目标位置
-facing_directions = [0, 60, 120, 180, 240, 300]#相机方向
+camera_positions = [(0, 0), (3, 3), (3, -3), (-3, 3), (-3, -3)]  # 相机位置
+targets_positions = matrixGenerator.generate_random_points(50)  # 目标位置
+facing_directions = [0, 60, 120, 180, 240, 300]  # 相机方向
 
-num_cameras = len(camera_positions)#相机数量
-num_targets = len(targets_positions)#目标的数量
+num_cameras = len(camera_positions)  # 相机数量
+num_targets = len(targets_positions)  # 目标的数量
 
-radius = 3#半径长度
-sector_angle = 45#相机角度
-full_coverage_angle = 90#全视图覆盖角度
+radius = 3  # 半径长度
+sector_angle = 45  # 相机角度
+full_coverage_angle = 90  # 全视图覆盖角度
 
 cameras = matrixGenerator.place_cameras(num_cameras, camera_positions, radius, sector_angle, full_coverage_angle)
 targets = matrixGenerator.place_targets(num_targets, targets_positions, facing_directions)
@@ -225,37 +226,106 @@ def countCoverageRate2(sequence, k, n):
     return count / k
 
 
+def extract_camera_angles(variable_values, num_cameras, num_directions):
+    camera_angles = {}
+    for i in range(num_cameras):
+        for j in range(num_directions):
+            if variable_values.get(f"x_{i}_{j}") == 1:
+                camera_angles[i] = j * (360 / num_directions)
+    return camera_angles
+
+
+def update_camera_angles(cameras, camera_angles):
+    for camera_idx, angle in camera_angles.items():
+        cameras[camera_idx].azimuth = angle
+
+
+def calculate_actual_coverage(cameras, targets):
+    """计算实际的覆盖率"""
+    covered_targets = set()
+    covered_directions = {}
+
+    for i, target in enumerate(targets):
+        covered_directions[i] = set()
+        for camera in cameras:
+            if camera.is_covered(target):
+                # 计算目标点到相机的角度
+                angle_to_camera = np.degrees(
+                    np.arctan2(target.position[1] - camera.position[1],
+                               target.position[0] - camera.position[0]))
+                angle_to_camera = (angle_to_camera + 360) % 360
+
+                # 检查是否在相机的覆盖范围内
+                angle_diff = abs(angle_to_camera - camera.azimuth)
+                if angle_diff <= camera.sector_angle / 2:
+                    covered_targets.add(i)
+                    covered_directions[i].add(angle_to_camera)
+
+    # 计算覆盖率
+    coverage_rate = len(covered_targets) / len(targets)
+
+    return coverage_rate, covered_targets, covered_directions
+
+
 def main():
     # 四维矩阵，四个维度分别代表目标个数，目标方向数，摄像机个数，摄像机可选方向数
 
     sim_env = visualization.SimulationEnvironment()
     sim_env.add_camera(cameras)
     sim_env.add_target(targets)
+
+    # 计算并显示初始覆盖率
+    initial_coverage, covered_targets, covered_directions = calculate_actual_coverage(cameras, targets)
+    sim_env.set_covered_targets(covered_targets)
+    sim_env.set_covered_directions(covered_directions)
     sim_env.update_visualization()
 
     matrix = matrixGenerator.find_covered_targets2(cameras, targets, 360 // sector_angle)
-    print(matrix)
 
+    # 对于算法1
     matrix_copy = copy.deepcopy(matrix)
     result1, countOfTimes1 = algorithm_1(matrix_copy)
+    object_value1, variable_values1 = solve_MILP1(matrix_copy)
+
+    # 提取相机角度并更新
+    camera_angles1 = extract_camera_angles(variable_values1, num_cameras, len(facing_directions))
+    cameras_copy1 = copy.deepcopy(cameras)
+    update_camera_angles(cameras_copy1, camera_angles1)
+
+    # 计算并显示算法1的实际覆盖率
+    coverage1, covered_targets1, covered_directions1 = calculate_actual_coverage(cameras_copy1, targets)
+    sim_env1 = visualization.SimulationEnvironment()
+    sim_env1.add_camera(cameras_copy1)
+    sim_env1.add_target(targets)
+    sim_env1.set_covered_targets(covered_targets1)
+    sim_env1.set_covered_directions(covered_directions1)
+    plt.title(f"Algorithm 1 Result (Coverage: {coverage1:.2%})")
+    sim_env1.update_visualization()
+
+    # 对于算法2
     matrix_copy = copy.deepcopy(matrix)
     result2, countOfTimes2 = algorithm_2(matrix_copy)
+    object_value2, variable_values2 = solve_MILP2(matrix_copy)
 
-    M = len(matrix)
-    Q = len(matrix[0])
-    N = len(matrix[0][0])
-    P = len(matrix[0][0][0])
-    print(M, Q, N, P)
+    # 提取相机角度并更新
+    camera_angles2 = extract_camera_angles(variable_values2, num_cameras, len(facing_directions))
+    cameras_copy2 = copy.deepcopy(cameras)
+    update_camera_angles(cameras_copy2, camera_angles2)
 
-    print("Algorithm 1 = " + str(result1))
-    print("Iterative Times: " + str(countOfTimes1))
-    print("Coverage Rate：" + str(countCoverageRate1(result1, len(matrix))))
-    print("Algorithm 2 = " + str(result2))
-    for i in range(len(result2)):
-        print("the " + str(i) + "th")
-        print(setOfFullCoveredTarget(result2[0:i + 1], len(matrix), len(matrix[0])))
-    print("Iterative Times: " + str(countOfTimes2))
-    print("Coverage Rate: " + str(countCoverageRate2(result2, len(matrix), len(matrix[0]))))
+    # 计算并显示算法2的实际覆盖率
+    coverage2, covered_targets2, covered_directions2 = calculate_actual_coverage(cameras_copy2, targets)
+    sim_env2 = visualization.SimulationEnvironment()
+    sim_env2.add_camera(cameras_copy2)
+    sim_env2.add_target(targets)
+    sim_env2.set_covered_targets(covered_targets2)
+    sim_env2.set_covered_directions(covered_directions2)
+    plt.title(f"Algorithm 2 Result (Coverage: {coverage2:.2%})")
+    sim_env2.update_visualization()
+
+    # 只输出算法1和算法2的覆盖率
+    print("\nCoverage Results:")
+    print(f"Algorithm 1 Coverage Rate: {coverage1:.2%}")
+    print(f"Algorithm 2 Coverage Rate: {coverage2:.2%}")
 
 
 if __name__ == "__main__":
